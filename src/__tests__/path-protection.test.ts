@@ -104,7 +104,7 @@ describe("isProtectedFile", () => {
 
   it("allows normal unprotected files", () => {
     expect(isProtectedFile("/some/path/readme.md")).toBe(false);
-    expect(isProtectedFile("/some/path/src/index.ts")).toBe(false);
+    expect(isProtectedFile("/some/path/src/utils/helpers.ts")).toBe(false);
     expect(isProtectedFile("/some/path/data.csv")).toBe(false);
   });
 
@@ -254,7 +254,7 @@ describe("path protection policy rules", () => {
     it("allows edit_own_file with absolute paths within cwd", () => {
       const cwd = process.cwd();
       const request = makeMockRequest("edit_own_file", {
-        path: path.join(cwd, "src", "index.ts"),
+        path: path.join(cwd, "src", "utils", "helpers.ts"),
       });
       request.tool = makeMockTool("edit_own_file");
       const result = traversalRule.evaluate(request);

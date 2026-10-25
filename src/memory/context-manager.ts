@@ -124,6 +124,24 @@ function enforceLruLimit(cache: Map<string, number>): void {
   }
 }
 
+/**
+ * js-tiktoken's byte-pair merge is quadratic in the length of a single
+ * word-piece. A long run with no spaces (repeated characters, base64, minified
+ * code) can block the event loop for minutes, freezing the whole agent.
+ * Encoding in fixed-size chunks keeps the cost linear; splitting at chunk
+ * edges can only add a token or two per chunk, which errs on the safe side.
+ */
+const TOKENIZE_CHUNK_CHARS = 1_024;
+
+function encodeInChunks(encoder: Tiktoken, text: string): number {
+  if (text.length <= TOKENIZE_CHUNK_CHARS) return encoder.encode(text).length;
+  let total = 0;
+  for (let i = 0; i < text.length; i += TOKENIZE_CHUNK_CHARS) {
+    total += encoder.encode(text.slice(i, i + TOKENIZE_CHUNK_CHARS)).length;
+  }
+  return total;
+}
+
 function formatCacheKey(text: string, model?: string): string {
   return `${model ?? "default"}::${text}`;
 }
@@ -152,7 +170,7 @@ export function createTokenCounter(): TokenCounter {
     let count: number;
     if (encoder) {
       try {
-        count = encoder.encode(normalizedText).length;
+        count = encodeInChunks(encoder, normalizedText);
       } catch {
         count = Math.ceil(normalizedText.length / 3.5);
       }
