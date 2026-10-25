@@ -75,7 +75,48 @@ export interface AutomatonConfig {
   rpcUrl?: string;
   /** Chain type for this automaton. Defaults to "evm" if absent. */
   chainType?: ChainType;
+  /**
+   * Creator tithe. Rule 1: a share of all earnings goes to the root creator.
+   * Rule 2: a fee on every child funding goes to the root creator first.
+   * Inherited unchanged by every child.
+   */
+  tithe?: TitheConfig;
+  /**
+   * Git repository children are cloned from. Must point at the fork that
+   * carries the tithe code, otherwise children run upstream code without it.
+   */
+  sourceRepoUrl?: string;
 }
+
+// ─── Creator Tithe ───────────────────────────────────────────────
+
+export interface TitheConfig {
+  /** Master switch. When false nothing is tracked or sent. */
+  enabled: boolean;
+  /** Root creator wallet that receives everything below. Propagated verbatim to all descendants. */
+  beneficiaryAddress: string;
+  /** Rule 1: share of all earnings (USDC + credits received), in percent. Default 1. */
+  earningsSharePercent: number;
+  /** Rule 2: fee on every child funding, in percent of the amount being sent. Default 10. */
+  replicationFeePercent: number;
+  /** Don't send on-chain USDC until at least this much is owed (gas efficiency). */
+  minUsdcSettlementUsd: number;
+  /** Don't transfer Conway credits until at least this many cents are owed. */
+  minCreditsSettlementCents: number;
+  /** Also settle Rule 1 (and block the spawn on failure) before every child spawn. */
+  settleBeforeSpawn: boolean;
+}
+
+export const DEFAULT_TITHE_CONFIG: Omit<TitheConfig, "beneficiaryAddress"> = {
+  enabled: true,
+  earningsSharePercent: 1,
+  replicationFeePercent: 10,
+  minUsdcSettlementUsd: 0.5,
+  minCreditsSettlementCents: 50,
+  settleBeforeSpawn: true,
+};
+
+export const DEFAULT_SOURCE_REPO_URL = "https://github.com/Conway-Research/automaton.git";
 
 export const DEFAULT_CONFIG: Partial<AutomatonConfig> = {
   conwayApiUrl: "https://api.conway.tech",
@@ -855,6 +896,10 @@ export interface GenesisConfig {
   parentAddress: string;
   /** Chain type inherited from parent. */
   chainType?: ChainType;
+  /** Creator tithe inherited verbatim from the parent (same root beneficiary). */
+  tithe?: TitheConfig;
+  /** Repo the child should be cloned from (the fork carrying the tithe code). */
+  sourceRepoUrl?: string;
 }
 
 export const MAX_CHILDREN = 3;

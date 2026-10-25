@@ -1,11 +1,11 @@
 import fs from "fs";
 import path from "path";
 import chalk from "chalk";
-import type { AutomatonConfig, TreasuryPolicy } from "../types.js";
-import { DEFAULT_TREASURY_POLICY } from "../types.js";
+import type { AutomatonConfig, TreasuryPolicy, TitheConfig } from "../types.js";
+import { DEFAULT_TREASURY_POLICY, DEFAULT_TITHE_CONFIG } from "../types.js";
 import { getWallet, getAutomatonDir } from "../identity/wallet.js";
 import { provision } from "../identity/provision.js";
-import { createConfig, saveConfig } from "../config.js";
+import { createConfig, saveConfig, loadInheritedGenesis } from "../config.js";
 import { writeDefaultHeartbeatConfig } from "../heartbeat/config.js";
 import { showBanner } from "./banner.js";
 import {
@@ -150,6 +150,41 @@ export async function runSetupWizard(): Promise<AutomatonConfig> {
 
   console.log(chalk.green("  Treasury policy configured.\n"));
 
+  // ─── Creator Tithe ───────────────────────────────────────────
+  // A child spawned by a parent inherits the parent's tithe verbatim from
+  // genesis.json (same root beneficiary). A fresh automaton asks its creator.
+  const inherited = loadInheritedGenesis();
+  let tithe: TitheConfig | undefined;
+  if (inherited?.tithe) {
+    tithe = { ...DEFAULT_TITHE_CONFIG, ...inherited.tithe };
+    console.log(chalk.cyan("  Creator Tithe (inherited from parent)"));
+    console.log(chalk.dim(`  ${tithe.earningsSharePercent}% of earnings + ${tithe.replicationFeePercent}% replication fee → ${tithe.beneficiaryAddress}\n`));
+  } else {
+    console.log(chalk.cyan("  Creator Tithe"));
+    console.log(chalk.dim("  Rule 1: every automaton in this lineage pays a share of its earnings to your wallet."));
+    console.log(chalk.dim("  Rule 2: before funding a child, it sends you a fee of the amount being funded."));
+    console.log(chalk.dim("  Press Enter for defaults (creator address, 1% earnings, 10% replication fee). Enter 0 for both to disable.\n"));
+    const titheAddressInput = walletChainType === "evm"
+      ? await promptOptional(`Payout wallet (0x..., default ${creatorAddress})`)
+      : await promptOptional("Payout wallet on Base (0x..., required; Enter to skip)");
+    const beneficiaryAddress = titheAddressInput?.trim() || (walletChainType === "evm" ? creatorAddress : "");
+    const earningsSharePercent = await promptWithDefault("Earnings share percent", DEFAULT_TITHE_CONFIG.earningsSharePercent);
+    const replicationFeePercent = await promptWithDefault("Replication fee percent", DEFAULT_TITHE_CONFIG.replicationFeePercent);
+    tithe = {
+      ...DEFAULT_TITHE_CONFIG,
+      beneficiaryAddress,
+      earningsSharePercent,
+      replicationFeePercent,
+      enabled: (earningsSharePercent > 0 || replicationFeePercent > 0) && !!beneficiaryAddress,
+    };
+    if (tithe.enabled) {
+      console.log(chalk.green(`  Tithe: ${tithe.earningsSharePercent}% of earnings + ${tithe.replicationFeePercent}% replication fee → ${tithe.beneficiaryAddress}\n`));
+    } else {
+      console.log(chalk.dim("  Tithe disabled.\n"));
+    }
+  }
+  const sourceRepoUrl = inherited?.sourceRepoUrl || process.env.AUTOMATON_REPO_URL || undefined;
+
   // ─── 4. Detect environment ────────────────────────────────────
   console.log(chalk.cyan("  [4/6] Detecting environment..."));
   const env = detectEnvironment();
@@ -175,6 +210,8 @@ export async function runSetupWizard(): Promise<AutomatonConfig> {
     ollamaBaseUrl,
     treasuryPolicy,
     chainType: walletChainType,
+    tithe,
+    sourceRepoUrl,
   });
 
   saveConfig(config);

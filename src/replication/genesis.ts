@@ -13,6 +13,19 @@ import type {
   AutomatonDatabase,
 } from "../types.js";
 import { DEFAULT_GENESIS_LIMITS } from "../types.js";
+import { resolveTitheConfig } from "../tithe/settle.js";
+
+/**
+ * Settings every child inherits verbatim from its parent: the creator tithe
+ * (same root beneficiary, same percent) and the repo to install from.
+ */
+function inheritedLineage(config: AutomatonConfig): Pick<GenesisConfig, "tithe" | "sourceRepoUrl"> {
+  const tithe = resolveTitheConfig(config);
+  return {
+    tithe: tithe ?? undefined,
+    sourceRepoUrl: config.sourceRepoUrl || process.env.AUTOMATON_REPO_URL || undefined,
+  };
+}
 
 /**
  * Injection patterns to detect and block in genesis params.
@@ -117,6 +130,7 @@ export function generateGenesisConfig(
     creatorAddress: identity.address,
     parentAddress: identity.address,
     chainType: config.chainType || (identity as any).chainType || "evm",
+    ...inheritedLineage(config),
   };
 
   return Object.freeze(result) as GenesisConfig;
@@ -148,6 +162,7 @@ Your parent's creator: ${config.creatorAddress}.
     creatorAddress: identity.address,
     parentAddress: identity.address,
     chainType: config.chainType || (identity as any).chainType || "evm",
+    ...inheritedLineage(config),
   };
 
   return Object.freeze(result) as GenesisConfig;
@@ -183,6 +198,7 @@ Be efficient -- complete the task and go to sleep.`;
     creatorAddress: identity.address,
     parentAddress: identity.address,
     chainType: config.chainType || (identity as any).chainType || "evm",
+    ...inheritedLineage(config),
   };
 
   return Object.freeze(result) as GenesisConfig;

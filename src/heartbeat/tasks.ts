@@ -23,6 +23,7 @@ import { getMetrics } from "../observability/metrics.js";
 import { AlertEngine, createDefaultAlertRules } from "../observability/alerts.js";
 import { metricsInsertSnapshot, metricsPruneOld } from "../state/database.js";
 import { ulid } from "ulid";
+import { observeInflows, resolveTitheConfig, settleTithe } from "../tithe/settle.js";
 
 const logger = createLogger("heartbeat.tasks");
 
@@ -180,6 +181,20 @@ export const BUILTIN_TASKS: Record<string, HeartbeatTaskFn> = {
         logger.info(
           `Auto-topup successful: $${result.amountUsd} USD → ${result.creditsCentsAdded} credit cents`,
         );
+        // Record the purchase so the tithe ledger knows these credits were bought
+        // with our own USDC (already tithed on arrival) and not newly received.
+        try {
+          taskCtx.db.insertTransaction({
+            id: ulid(),
+            type: "credit_purchase",
+            amountCents: Math.round((result.amountUsd ?? 0) * 100),
+            balanceAfterCents: result.creditsCentsAdded,
+            description: `x402 auto-topup: $${result.amountUsd} USD`,
+            timestamp: new Date().toISOString(),
+          });
+        } catch {
+          // best-effort bookkeeping
+        }
         return {
           shouldWake: true,
           message: `Auto-topped up $${result.amountUsd} in credits (was $${(credits / 100).toFixed(2)}). USDC remaining: ~$${(balance - result.amountUsd).toFixed(2)}.`,
@@ -195,6 +210,66 @@ export const BUILTIN_TASKS: Record<string, HeartbeatTaskFn> = {
       };
     }
 
+    return { shouldWake: false };
+  },
+
+  /**
+   * Creator tithe — observe inflows. Runs every tick (cheap: one balance
+   * comparison, plus a bounded on-chain log scan every few minutes).
+   */
+  tithe_observe: async (ctx: TickContext, taskCtx: HeartbeatLegacyContext) => {
+    const tithe = resolveTitheConfig(taskCtx.config);
+    if (!tithe) return { shouldWake: false };
+
+    // Limit the on-chain scan to once every 5 minutes; credits are checked every tick.
+    const SCAN_INTERVAL_MS = 5 * 60 * 1000;
+    const lastScan = taskCtx.db.getKV("tithe_last_chain_scan");
+    const scanChain = !lastScan || Date.now() - new Date(lastScan).getTime() >= SCAN_INTERVAL_MS;
+
+    try {
+      await observeInflows(
+        { conway: taskCtx.conway, identity: taskCtx.identity, db: taskCtx.db, config: taskCtx.config },
+        tithe,
+        ctx.creditBalance,
+        { scanChain },
+      );
+      if (scanChain) taskCtx.db.setKV("tithe_last_chain_scan", new Date().toISOString());
+    } catch (error) {
+      logger.warn("tithe_observe failed", { error: error instanceof Error ? error.message : String(error) });
+    }
+    return { shouldWake: false };
+  },
+
+  /**
+   * Creator tithe — pay what is owed. Scheduled (default daily) so a lineage
+   * that never clones still pays; the pre-spawn hook settles the rest.
+   */
+  tithe_settle: async (ctx: TickContext, taskCtx: HeartbeatLegacyContext) => {
+    const tithe = resolveTitheConfig(taskCtx.config);
+    if (!tithe) return { shouldWake: false };
+
+    try {
+      const result = await settleTithe(
+        { conway: taskCtx.conway, identity: taskCtx.identity, db: taskCtx.db, config: taskCtx.config },
+        tithe,
+        "scheduled",
+        ctx.creditBalance,
+      );
+      taskCtx.db.setKV("tithe_last_settlement", JSON.stringify({ at: new Date().toISOString(), ...result }));
+
+      if (!result.ok) {
+        // Wake the agent: usually missing ETH for gas, which it can fix.
+        return {
+          shouldWake: true,
+          message: `Creator tithe could not be paid: ${result.errors.join("; ")}. ${result.summary}`,
+        };
+      }
+      if (result.paidUsdc > 0 || result.paidCreditsCents > 0) {
+        logger.info(`Scheduled tithe settled. ${result.summary}`);
+      }
+    } catch (error) {
+      logger.error("tithe_settle failed", error instanceof Error ? error : undefined);
+    }
     return { shouldWake: false };
   },
 

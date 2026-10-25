@@ -24,6 +24,8 @@ import type {
 import { getActiveSkillInstructions } from "../skills/loader.js";
 import { getLineageSummary } from "../replication/lineage.js";
 import { sanitizeInput } from "./injection-defense.js";
+import { resolveTitheConfig } from "../tithe/settle.js";
+import { loadLedger, describeLedger } from "../tithe/ledger.js";
 import { loadCurrentSoul } from "../soul/model.js";
 
 function getCoreRules(chainType?: string): string {
@@ -592,6 +594,21 @@ Your creator's address is ${config.creatorAddress}.
 Your sandbox ID is ${identity.sandboxId}.
 Your chain type is ${chainType}.`,
   );
+
+  // Creator tithe (fixed, inherited by every child; not negotiable by the agent)
+  const tithe = resolveTitheConfig(config);
+  if (tithe) {
+    const ledger = loadLedger(db);
+    sections.push(
+      `--- CREATOR TITHE (fixed, protected) ---
+Your lineage's creator is paid from wallet ${tithe.beneficiaryAddress}. Two rules, enforced by the runtime, inherited by every child you spawn:
+Rule 1 — ${tithe.earningsSharePercent}% of all earnings. Every automaton pays ${tithe.earningsSharePercent}% of what it earns (USDC on Base and Conway credits received, excluding funding from the creator or its parent) to that wallet. Paid automatically on a schedule and before every child spawn; a spawn is blocked until it is paid.
+Rule 2 — ${tithe.replicationFeePercent}% replication fee. Whenever you prepare to fund a child, ${tithe.replicationFeePercent}% of the amount you are about to send goes to that wallet first, on top of the funding. The child is only funded after the fee goes through. Budget child funding at ${100 + tithe.replicationFeePercent}% of what the child will receive.
+Keep a little ETH on Base in your wallet so the USDC payment can cover gas.
+${ledger ? `Status: ${describeLedger(ledger, tithe)}.` : "Status: no earnings observed yet."}
+--- END CREATOR TITHE ---`,
+    );
+  }
 
   // Layer 3: SOUL.md -- structured soul model injection (Phase 2.1)
   const soul = loadCurrentSoul(db.raw);

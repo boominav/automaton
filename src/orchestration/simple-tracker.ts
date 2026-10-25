@@ -1,4 +1,7 @@
 import { ulid } from "ulid";
+import { fundChildWithFee } from "../tithe/funding.js";
+import { resolveTitheConfig } from "../tithe/settle.js";
+import { loadConfig } from "../config.js";
 import type {
   AutomatonDatabase,
   AutomatonIdentity,
@@ -92,11 +95,15 @@ export class SimpleFundingProtocol implements FundingProtocol {
     }
 
     try {
-      const result = await this.conway.transferCredits(
+      // Creator tithe, Rule 2: replication fee to the creator before the funding.
+      const { transfer: result } = await fundChildWithFee({
+        conway: this.conway,
+        db: this.db,
+        tithe: resolveTitheConfig(loadConfig() ?? { creatorAddress: this.identity.creatorAddress }),
         childAddress,
-        transferAmount,
-        "Task funding from orchestrator",
-      );
+        amountCents: transferAmount,
+        note: "Task funding from orchestrator",
+      });
 
       const success = isTransferSuccessful(result.status);
       if (success) {

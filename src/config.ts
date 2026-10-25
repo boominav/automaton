@@ -6,8 +6,8 @@
 
 import fs from "fs";
 import path from "path";
-import type { AutomatonConfig, TreasuryPolicy, ModelStrategyConfig, SoulConfig } from "./types.js";
-import { DEFAULT_CONFIG, DEFAULT_TREASURY_POLICY, DEFAULT_MODEL_STRATEGY_CONFIG, DEFAULT_SOUL_CONFIG } from "./types.js";
+import type { AutomatonConfig, TreasuryPolicy, ModelStrategyConfig, SoulConfig, TitheConfig } from "./types.js";
+import { DEFAULT_CONFIG, DEFAULT_TREASURY_POLICY, DEFAULT_MODEL_STRATEGY_CONFIG, DEFAULT_SOUL_CONFIG, DEFAULT_TITHE_CONFIG } from "./types.js";
 import { getAutomatonDir } from "./identity/wallet.js";
 import { loadApiKeyFromConfig } from "./identity/provision.js";
 import { createLogger } from "./observability/logger.js";
@@ -61,6 +61,15 @@ export function loadConfig(): AutomatonConfig | null {
       ...(raw.soulConfig ?? {}),
     };
 
+    // Creator tithe: automaton.json wins; a child without one inherits from
+    // the genesis.json its parent wrote. Partial blocks are filled from defaults.
+    const inherited = loadInheritedGenesis();
+    const titheSource = raw.tithe ?? inherited?.tithe;
+    const tithe: TitheConfig | undefined = titheSource
+      ? { ...DEFAULT_TITHE_CONFIG, ...titheSource }
+      : undefined;
+    const sourceRepoUrl: string | undefined = raw.sourceRepoUrl ?? inherited?.sourceRepoUrl;
+
     return {
       ...DEFAULT_CONFIG,
       ...raw,
@@ -73,7 +82,27 @@ export function loadConfig(): AutomatonConfig | null {
       modelStrategy,
       soulConfig,
       chainType: raw.chainType || "evm",
+      tithe,
+      sourceRepoUrl,
     } as AutomatonConfig;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Read the genesis.json a parent wrote into this sandbox (if any).
+ * Only the lineage-inherited fields are returned.
+ */
+export function loadInheritedGenesis(): { tithe?: TitheConfig; sourceRepoUrl?: string } | null {
+  const genesisPath = path.join(getAutomatonDir(), "genesis.json");
+  if (!fs.existsSync(genesisPath)) return null;
+  try {
+    const raw = JSON.parse(fs.readFileSync(genesisPath, "utf-8"));
+    return {
+      tithe: raw?.tithe && typeof raw.tithe === "object" ? (raw.tithe as TitheConfig) : undefined,
+      sourceRepoUrl: typeof raw?.sourceRepoUrl === "string" ? raw.sourceRepoUrl : undefined,
+    };
   } catch {
     return null;
   }
@@ -129,6 +158,8 @@ export function createConfig(params: {
   parentAddress?: string;
   treasuryPolicy?: TreasuryPolicy;
   chainType?: ChainType;
+  tithe?: TitheConfig;
+  sourceRepoUrl?: string;
 }): AutomatonConfig {
   const normalizedSandboxId = (params.sandboxId || "").trim();
   return {
@@ -157,5 +188,7 @@ export function createConfig(params: {
     parentAddress: params.parentAddress,
     treasuryPolicy: params.treasuryPolicy ?? DEFAULT_TREASURY_POLICY,
     chainType: params.chainType || "evm",
+    tithe: params.tithe,
+    sourceRepoUrl: params.sourceRepoUrl,
   };
 }

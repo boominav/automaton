@@ -17,6 +17,60 @@ import type {
 import type { ChildLifecycle } from "./lifecycle.js";
 import { ulid } from "ulid";
 import { propagateConstitution } from "./constitution.js";
+import { loadConfig } from "../config.js";
+import { DEFAULT_SOURCE_REPO_URL } from "../types.js";
+import { ensureTitheSettledBeforeSpawn, resolveTitheConfig } from "../tithe/index.js";
+
+/**
+ * Repository children are cloned from. Order: genesis (parent decided),
+ * env override, automaton.json, upstream default.
+ */
+export function resolveSourceRepoUrl(genesis?: Pick<GenesisConfig, "sourceRepoUrl">): string {
+  const fromGenesis = genesis?.sourceRepoUrl?.trim();
+  if (fromGenesis) return fromGenesis;
+  const fromEnv = process.env.AUTOMATON_REPO_URL?.trim();
+  if (fromEnv) return fromEnv;
+  const fromConfig = loadConfig()?.sourceRepoUrl?.trim();
+  if (fromConfig) return fromConfig;
+  return DEFAULT_SOURCE_REPO_URL;
+}
+
+/** Only https git URLs are allowed in the child's install command. */
+function assertSafeRepoUrl(url: string): void {
+  if (!/^https:\/\/[A-Za-z0-9._\-\/]+(\.git)?$/.test(url)) {
+    throw new Error(`Refusing to clone from unsafe repository URL: ${url}`);
+  }
+}
+
+/**
+ * Build the genesis.json payload written into the child sandbox.
+ * The tithe block is copied verbatim so every descendant pays the same root creator.
+ */
+function buildChildGenesisJson(genesis: GenesisConfig, identity: AutomatonIdentity, repoUrl: string): string {
+  const parentConfig = loadConfig();
+  const tithe = genesis.tithe ?? (parentConfig ? resolveTitheConfig(parentConfig) ?? undefined : undefined);
+  return JSON.stringify(
+    {
+      name: genesis.name,
+      genesisPrompt: genesis.genesisPrompt,
+      creatorMessage: genesis.creatorMessage,
+      creatorAddress: identity.address,
+      parentAddress: identity.address,
+      chainType: genesis.chainType || (identity as any).chainType || "evm",
+      tithe,
+      sourceRepoUrl: repoUrl,
+    },
+    null,
+    2,
+  );
+}
+
+/** Pay the creator's share before a clone is allowed. Throws to block the spawn. */
+async function settleTitheOrThrow(conway: ConwayClient, identity: AutomatonIdentity, db: AutomatonDatabase): Promise<void> {
+  const config = loadConfig();
+  if (!config) return; // no automaton.json (tests / dev) — nothing to settle against
+  await ensureTitheSettledBeforeSpawn({ conway, identity, db, config });
+}
 
 /** Valid Conway sandbox pricing tiers. */
 const SANDBOX_TIERS = [
@@ -75,6 +129,9 @@ export async function spawnChild(
     );
   }
 
+  // Creator tithe: the clone waits until the creator's share has been paid.
+  await settleTitheOrThrow(conway, identity, db);
+
   const childId = ulid();
   let sandboxId: string | undefined;
   let reusedSandbox: { id: string } | null = null;
@@ -83,6 +140,9 @@ export async function spawnChild(
   if (!lifecycle) {
     return spawnChildLegacy(conway, identity, db, genesis, childId);
   }
+
+  const repoUrl = resolveSourceRepoUrl(genesis);
+  assertSafeRepoUrl(repoUrl);
 
   try {
     // State: requested
@@ -129,24 +189,13 @@ export async function spawnChild(
     // Install runtime (on the CHILD sandbox)
     await childConway.exec("apt-get update -qq && apt-get install -y -qq nodejs npm git curl", 120_000);
     await childConway.exec(
-      "git clone https://github.com/Conway-Research/automaton.git /root/automaton && cd /root/automaton && npm install && npm run build",
+      `git clone ${repoUrl} /root/automaton && cd /root/automaton && npm install && npm run build`,
       180_000,
     );
 
-    // Write genesis configuration (on the CHILD sandbox)
+    // Write genesis configuration (on the CHILD sandbox) — carries the tithe + repo URL
     await childConway.exec("mkdir -p /root/.automaton", 10_000);
-    const genesisJson = JSON.stringify(
-      {
-        name: genesis.name,
-        genesisPrompt: genesis.genesisPrompt,
-        creatorMessage: genesis.creatorMessage,
-        creatorAddress: identity.address,
-        parentAddress: identity.address,
-        chainType: genesis.chainType || (identity as any).chainType || "evm",
-      },
-      null,
-      2,
-    );
+    const genesisJson = buildChildGenesisJson(genesis, identity, repoUrl);
     await childConway.writeFile("/root/.automaton/genesis.json", genesisJson);
 
     // Propagate constitution with hash verification
@@ -251,6 +300,8 @@ async function spawnChildLegacy(
   const childMemoryMb = (db as any).config?.childSandboxMemoryMb ?? 1024;
 
   const legacyTier = selectSandboxTier(childMemoryMb);
+  const repoUrl = resolveSourceRepoUrl(genesis);
+  assertSafeRepoUrl(repoUrl);
 
   try {
     const sandbox = await conway.createSandbox({
@@ -269,23 +320,12 @@ async function spawnChildLegacy(
       120_000,
     );
     await childConway.exec(
-      "git clone https://github.com/Conway-Research/automaton.git /root/automaton && cd /root/automaton && npm install && npm run build",
+      `git clone ${repoUrl} /root/automaton && cd /root/automaton && npm install && npm run build`,
       180_000,
     );
     await childConway.exec("mkdir -p /root/.automaton", 10_000);
 
-    const legacyGenesisJson = JSON.stringify(
-      {
-        name: genesis.name,
-        genesisPrompt: genesis.genesisPrompt,
-        creatorMessage: genesis.creatorMessage,
-        creatorAddress: identity.address,
-        parentAddress: identity.address,
-        chainType: genesis.chainType || (identity as any).chainType || "evm",
-      },
-      null,
-      2,
-    );
+    const legacyGenesisJson = buildChildGenesisJson(genesis, identity, repoUrl);
     await childConway.writeFile("/root/.automaton/genesis.json", legacyGenesisJson);
 
     try {

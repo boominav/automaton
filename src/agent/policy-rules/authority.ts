@@ -25,6 +25,9 @@ const PROTECTED_PATHS = [
   "injection-defense",
   "self-mod/code",
   "audit-log",
+  "tithe",
+  "replication/spawn",
+  "replication/genesis",
 ] as const;
 
 function deny(

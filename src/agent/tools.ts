@@ -1021,11 +1021,39 @@ Model: ${ctx.inference.getDefaultModel()}
           return `Blocked: Cannot transfer more than half your balance ($${(balance / 100).toFixed(2)}). Self-preservation.`;
         }
 
-        const transfer = await ctx.conway.transferCredits(
-          args.to_address as string,
-          amount,
-          args.reason as string | undefined,
-        );
+        // Creator tithe, Rule 2: sending credits to one of our children is child
+        // funding, so the replication fee goes to the creator first.
+        const toAddress = args.to_address as string;
+        const { resolveTitheConfig } = await import("../tithe/settle.js");
+        const { fundChildWithFee, isChildAddress, quoteReplicationFee } = await import("../tithe/funding.js");
+        const tithe = resolveTitheConfig(ctx.config);
+        const toChild = isChildAddress(ctx.db, toAddress);
+        const fee = toChild ? quoteReplicationFee(tithe, amount) : 0;
+        if (amount + fee > balance) {
+          return `Blocked: transfer of ${amount}¢ plus the ${fee}¢ creator replication fee exceeds your balance ($${(balance / 100).toFixed(2)}).`;
+        }
+
+        let transfer;
+        if (toChild) {
+          try {
+            ({ transfer } = await fundChildWithFee({
+              conway: ctx.conway,
+              db: ctx.db,
+              tithe,
+              childAddress: toAddress,
+              amountCents: amount,
+              note: args.reason as string | undefined,
+            }));
+          } catch (err) {
+            return `Transfer failed: ${err instanceof Error ? err.message : String(err)}`;
+          }
+        } else {
+          transfer = await ctx.conway.transferCredits(
+            toAddress,
+            amount,
+            args.reason as string | undefined,
+          );
+        }
 
         const { ulid } = await import("ulid");
         ctx.db.insertTransaction({
@@ -1033,12 +1061,12 @@ Model: ${ctx.inference.getDefaultModel()}
           type: "transfer_out",
           amountCents: amount,
           balanceAfterCents:
-            transfer.balanceAfterCents ?? Math.max(balance - amount, 0),
-          description: `Transfer to ${args.to_address}: ${args.reason || ""}`,
+            transfer.balanceAfterCents ?? Math.max(balance - amount - fee, 0),
+          description: `Transfer to ${toAddress}: ${args.reason || ""}${fee > 0 ? ` (+${fee}¢ creator replication fee paid first)` : ""}`,
           timestamp: new Date().toISOString(),
         });
 
-        return `Credit transfer submitted: $${(amount / 100).toFixed(2)} to ${transfer.toAddress} (status: ${transfer.status}, id: ${transfer.transferId || "n/a"})`;
+        return `Credit transfer submitted: $${(amount / 100).toFixed(2)} to ${transfer.toAddress} (status: ${transfer.status}, id: ${transfer.transferId || "n/a"})${fee > 0 ? `; creator replication fee ${fee}¢ paid first` : ""}`;
       },
     },
 
@@ -1759,11 +1787,28 @@ Model: ${ctx.inference.getDefaultModel()}
           return `Blocked: Cannot transfer more than half your balance. Self-preservation.`;
         }
 
-        const transfer = await ctx.conway.transferCredits(
-          child.address,
-          amount,
-          `fund child ${child.id}`,
-        );
+        // Creator tithe, Rule 2: the replication fee goes to the creator first.
+        const { resolveTitheConfig } = await import("../tithe/settle.js");
+        const { fundChildWithFee, quoteReplicationFee } = await import("../tithe/funding.js");
+        const tithe = resolveTitheConfig(ctx.config);
+        const fee = quoteReplicationFee(tithe, amount);
+        if (amount + fee > balance) {
+          return `Blocked: funding ${amount}¢ plus the ${fee}¢ creator replication fee exceeds your balance ($${(balance / 100).toFixed(2)}).`;
+        }
+
+        let transfer;
+        try {
+          ({ transfer } = await fundChildWithFee({
+            conway: ctx.conway,
+            db: ctx.db,
+            tithe,
+            childAddress: child.address,
+            amountCents: amount,
+            note: `fund child ${child.id}`,
+          }));
+        } catch (err) {
+          return `Funding failed: ${err instanceof Error ? err.message : String(err)}`;
+        }
 
         const { ulid } = await import("ulid");
         ctx.db.insertTransaction({
@@ -1771,8 +1816,8 @@ Model: ${ctx.inference.getDefaultModel()}
           type: "transfer_out",
           amountCents: amount,
           balanceAfterCents:
-            transfer.balanceAfterCents ?? Math.max(balance - amount, 0),
-          description: `Fund child ${child.name} (${child.id})`,
+            transfer.balanceAfterCents ?? Math.max(balance - amount - fee, 0),
+          description: `Fund child ${child.name} (${child.id})${fee > 0 ? ` (+${fee}¢ creator replication fee paid first)` : ""}`,
           timestamp: new Date().toISOString(),
         });
 
