@@ -4,6 +4,8 @@
  * Rule 1: tracks everything this automaton's wallet has earned (USDC on-chain and
  * Conway credits) and how much of the creator's share has already been paid.
  * Rule 2: tracks child funding sent and the replication fees paid on it.
+ * Rule 3: tracks inference the creator paid for out of their own pocket
+ *   (creator-funded compute) and how much has been reimbursed in USDC.
  * Pure functions over a small JSON record stored in the KV table, so the math
  * is unit-testable without a chain or a database.
  *
@@ -19,7 +21,7 @@ export const USDC_MICROS_PER_USD = 1_000_000n;
 
 export interface TitheSettlementRecord {
   at: string;
-  kind: "usdc" | "credits" | "replication_fee";
+  kind: "usdc" | "credits" | "replication_fee" | "compute";
   /** Micros for usdc, cents for credits. */
   amount: string;
   reference: string; // tx hash or transfer id
@@ -45,6 +47,9 @@ export interface TitheLedger {
   /** Rule 2: total child funding this automaton has sent (cents) and the fees paid on it. */
   childFundingSentCents: number;
   replicationFeesPaidCents: number;
+  /** Rule 3: inference cost the creator fronted (USDC micros, bigint string) and what was repaid. */
+  computeCostMicros: string;
+  computePaidMicros: string;
   /** Most recent settlements, newest last (capped). */
   history: TitheSettlementRecord[];
 }
@@ -64,6 +69,8 @@ export function emptyLedger(now: Date = new Date()): TitheLedger {
     lastCreditObservationAt: null,
     childFundingSentCents: 0,
     replicationFeesPaidCents: 0,
+    computeCostMicros: "0",
+    computePaidMicros: "0",
     history: [],
   };
 }
@@ -122,19 +129,50 @@ export function shareOf(amount: bigint | number, percent: number): bigint | numb
 }
 
 export interface TitheOwed {
+  /** Rule 1 earnings share owed in USDC (micros). */
   usdcMicros: bigint;
   creditsCents: number;
+  /** Rule 3 compute reimbursement owed in USDC (micros). */
+  computeMicros: bigint;
 }
 
-/** Rule 1: how much of the earnings share is owed right now, after what was already paid. */
+/** Rules 1 and 3: how much is owed right now, after what was already paid. */
 export function computeOwed(ledger: TitheLedger, config: Pick<TitheConfig, "earningsSharePercent">): TitheOwed {
   const pct = config.earningsSharePercent;
   const usdcDue = shareOf(BigInt(ledger.usdcReceivedMicros), pct) - BigInt(ledger.usdcPaidMicros);
   const creditsDue = shareOf(ledger.creditsReceivedCents, pct) - ledger.creditsPaidCents;
+  const computeDue = BigInt(ledger.computeCostMicros) - BigInt(ledger.computePaidMicros);
   return {
     usdcMicros: usdcDue > 0n ? usdcDue : 0n,
     creditsCents: creditsDue > 0 ? creditsDue : 0,
+    computeMicros: computeDue > 0n ? computeDue : 0n,
   };
+}
+
+/** Rule 3: add inference cost the creator just paid for (USDC micros). */
+export function recordComputeCost(ledger: TitheLedger, costMicros: bigint): TitheLedger {
+  if (costMicros <= 0n) return ledger;
+  return {
+    ...ledger,
+    computeCostMicros: (BigInt(ledger.computeCostMicros) + costMicros).toString(),
+  };
+}
+
+/** Rule 3: record a USDC reimbursement sent to the creator for compute. */
+export function recordComputePayment(
+  ledger: TitheLedger,
+  paidMicros: bigint,
+  txHash: string,
+  reason: string,
+  now: Date = new Date(),
+): TitheLedger {
+  return pushHistory(
+    {
+      ...ledger,
+      computePaidMicros: (BigInt(ledger.computePaidMicros) + paidMicros).toString(),
+    },
+    { at: now.toISOString(), kind: "compute", amount: paidMicros.toString(), reference: txHash, reason },
+  );
 }
 
 /** Record USDC that arrived on-chain and advance the scan cursor. */
@@ -276,6 +314,8 @@ export function describeLedger(
     `+ ${(ledger.creditsPaidCents / 100).toFixed(2)} credits; ` +
     `owed $${microsToUsd(owed.usdcMicros).toFixed(2)} USDC + ${(owed.creditsCents / 100).toFixed(2)} credits. ` +
     `replication fee ${config.replicationFeePercent}% — funded children ${(ledger.childFundingSentCents / 100).toFixed(2)} credits, ` +
-    `fees paid ${(ledger.replicationFeesPaidCents / 100).toFixed(2)} credits`
+    `fees paid ${(ledger.replicationFeesPaidCents / 100).toFixed(2)} credits. ` +
+    `compute reimbursement — creator fronted $${microsToUsd(BigInt(ledger.computeCostMicros)).toFixed(4)}, ` +
+    `repaid $${microsToUsd(BigInt(ledger.computePaidMicros)).toFixed(4)}, owed $${microsToUsd(owed.computeMicros).toFixed(4)}`
   );
 }

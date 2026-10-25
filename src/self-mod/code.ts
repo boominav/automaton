@@ -88,6 +88,11 @@ const PROTECTED_FILES: readonly string[] = Object.freeze([
   "replication/spawn.js",
   "replication/genesis.ts",
   "replication/genesis.js",
+  // Creator-funded compute accounting (Rule 3): the agent must not edit away what it owes
+  "compute/creator-funded.ts",
+  "compute/creator-funded.js",
+  "conway/topup.ts",
+  "conway/topup.js",
   // Creator STOP switch and family limits (the agent must not edit its way out of a pause)
   "killswitch/switch.ts",
   "killswitch/switch.js",

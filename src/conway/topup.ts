@@ -13,6 +13,7 @@
  * Valid tiers: 5, 25, 100, 500, 1000, 2500 (USD)
  */
 
+import { isCreatorFundedActive } from "../compute/creator-funded.js";
 import type { PrivateKeyAccount, Address } from "viem";
 import { x402Fetch, getUsdcBalance } from "./x402.js";
 import { createLogger } from "../observability/logger.js";
@@ -153,6 +154,9 @@ export async function bootstrapTopup(params: {
   chainType?: ChainType;
 }): Promise<TopupResult | null> {
   const { apiUrl, account, creditsCents, creditThresholdCents = 500, chainType } = params;
+
+  // Creator-funded compute: there are no Conway credits to buy.
+  if (isCreatorFundedActive()) return null;
 
   // Solana wallets cannot use x402 for topup (EVM-only payment protocol)
   if (chainType === "solana") {

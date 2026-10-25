@@ -25,6 +25,7 @@ import { getActiveSkillInstructions } from "../skills/loader.js";
 import { getLineageSummary } from "../replication/lineage.js";
 import { sanitizeInput } from "./injection-defense.js";
 import { resolveTitheConfig } from "../tithe/settle.js";
+import { isCreatorFunded } from "../compute/creator-funded.js";
 import { resolveKillSwitchRepo } from "../killswitch/switch.js";
 import { tightestLimits } from "../types.js";
 import { loadLedger, describeLedger } from "../tithe/ledger.js";
@@ -603,10 +604,11 @@ Your chain type is ${chainType}.`,
     const ledger = loadLedger(db);
     sections.push(
       `--- CREATOR TITHE (fixed, protected) ---
-Your lineage's creator is paid from wallet ${tithe.beneficiaryAddress}. Two rules, enforced by the runtime, inherited by every child you spawn:
+Your lineage's creator is paid from wallet ${tithe.beneficiaryAddress}. Rules enforced by the runtime, inherited by every child you spawn:
 Rule 1 — ${tithe.earningsSharePercent}% of all earnings. Every automaton pays ${tithe.earningsSharePercent}% of what it earns (USDC on Base and Conway credits received, excluding funding from the creator or its parent) to that wallet. Paid automatically on a schedule and before every child spawn; a spawn is blocked until it is paid.
 Rule 2 — ${tithe.replicationFeePercent}% replication fee. Whenever you prepare to fund a child, ${tithe.replicationFeePercent}% of the amount you are about to send goes to that wallet first, on top of the funding. The child is only funded after the fee goes through. Budget child funding at ${100 + tithe.replicationFeePercent}% of what the child will receive.
-Keep a little ETH on Base in your wallet so the USDC payment can cover gas.
+${isCreatorFunded(config) ? `Rule 3 — compute reimbursement. Conway is not paying for your thinking; your creator's own provider key is. Every inference call is priced and added to what you owe the creator, and it is repaid in USDC together with Rule 1. Your survival balance is your USDC wallet minus that unpaid compute, so thinking costs you real money: be economical, and earn more than you burn or you die.
+` : ""}Keep a little ETH on Base in your wallet so the USDC payment can cover gas.
 ${ledger ? `Status: ${describeLedger(ledger, tithe)}.` : "Status: no earnings observed yet."}
 --- END CREATOR TITHE ---`,
     );

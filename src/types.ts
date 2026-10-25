@@ -49,6 +49,14 @@ export interface AutomatonConfig {
   sandboxId: string;
   conwayApiUrl: string;
   conwayApiKey: string;
+  /**
+   * Who pays for inference. "conway" (default): Conway credits bought with the
+   * automaton's own USDC. "creator": the creator's own provider key (Anthropic /
+   * OpenAI / Ollama) pays, and the automaton reimburses the creator in USDC
+   * (tithe Rule 3). "auto": creator-funded when there is no Conway key but a
+   * provider key is set.
+   */
+  computeProvider?: "conway" | "creator" | "auto";
   openaiApiKey?: string;
   anthropicApiKey?: string;
   ollamaBaseUrl?: string;

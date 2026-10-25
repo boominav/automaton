@@ -24,6 +24,7 @@ import {
   loadOrCreateLedger,
   microsToUsd,
   normalizePercent,
+  recordComputePayment,
   recordCreditObservation,
   recordCreditsPayment,
   recordUsdcInflow,
@@ -33,6 +34,7 @@ import {
   type TitheLedger,
 } from "./ledger.js";
 import { getCurrentBlock, scanUsdcInflows, sendUsdc } from "./chain.js";
+import { isCreatorFunded } from "../compute/creator-funded.js";
 
 const logger = createLogger("tithe");
 
@@ -121,7 +123,9 @@ export async function observeInflows(
   let ledger = loadOrCreateLedger(ctx.db);
 
   // Credits: delta tracking, net of our own top-ups.
-  if (creditBalanceCents !== null && Number.isFinite(creditBalanceCents)) {
+  // In creator-funded mode the "credit balance" is really the USDC balance,
+  // which the on-chain scan below already tithes — skip it to avoid double counting.
+  if (!isCreatorFunded(ctx.config) && creditBalanceCents !== null && Number.isFinite(creditBalanceCents)) {
     const purchased = selfPurchasedCreditsSince(ctx.db, ledger.lastCreditObservationAt);
     ledger = recordCreditObservation(ledger, creditBalanceCents, purchased);
   }
@@ -163,12 +167,16 @@ export async function observeInflows(
 
 export interface TitheSettlementResult {
   ok: boolean;
+  /** Rule 1 earnings share paid this run (USD). */
   paidUsdc: number;
+  /** Rule 3 compute reimbursement paid this run (USD). */
+  paidComputeUsd: number;
   paidCreditsCents: number;
   usdcTxHash?: string;
   creditsTransferId?: string;
   /** Still owed after this run (below minimums or failed). */
   remainingUsdc: number;
+  remainingComputeUsd: number;
   remainingCreditsCents: number;
   errors: string[];
   summary: string;
@@ -187,6 +195,7 @@ export async function settleTithe(
   let ledger = await observeInflows(ctx, tithe, creditBalanceCents);
   const errors: string[] = [];
   let paidUsdc = 0;
+  let paidComputeUsd = 0;
   let paidCreditsCents = 0;
   let usdcTxHash: string | undefined;
   let creditsTransferId: string | undefined;
@@ -194,22 +203,34 @@ export async function settleTithe(
   const owed = computeOwed(ledger, tithe);
   const beneficiary = tithe.beneficiaryAddress as Address;
 
-  // ── USDC ──────────────────────────────────────────────────────
-  if (isEvm(ctx) && owed.usdcMicros >= usdToMicros(tithe.minUsdcSettlementUsd)) {
+  // ── USDC: Rule 1 earnings share + Rule 3 compute reimbursement ──
+  // Both go to the same wallet, so they ride in one on-chain transfer once the
+  // combined amount clears the minimum (one gas fee instead of two).
+  const usdcTotal = owed.usdcMicros + owed.computeMicros;
+  if (isEvm(ctx) && usdcTotal > 0n && usdcTotal >= usdToMicros(tithe.minUsdcSettlementUsd)) {
     try {
-      const { txHash } = await sendUsdc(ctx.identity.account, beneficiary, owed.usdcMicros, ctx.config.rpcUrl);
-      ledger = recordUsdcPayment(ledger, owed.usdcMicros, txHash, reason);
+      const { txHash } = await sendUsdc(ctx.identity.account, beneficiary, usdcTotal, ctx.config.rpcUrl);
+      if (owed.usdcMicros > 0n) ledger = recordUsdcPayment(ledger, owed.usdcMicros, txHash, reason);
+      if (owed.computeMicros > 0n) ledger = recordComputePayment(ledger, owed.computeMicros, txHash, reason);
       saveLedger(ctx.db, ledger);
       usdcTxHash = txHash;
       paidUsdc = microsToUsd(owed.usdcMicros);
+      paidComputeUsd = microsToUsd(owed.computeMicros);
+      const total = microsToUsd(usdcTotal);
       ctx.db.insertTransaction({
         id: ulid(),
         type: "transfer_out",
-        amountCents: Math.round(paidUsdc * 100),
-        description: `Creator earnings share (${tithe.earningsSharePercent}%): $${paidUsdc.toFixed(2)} USDC → ${beneficiary} [${reason}] tx ${txHash}`,
+        amountCents: Math.round(total * 100),
+        description:
+          `Creator payment: $${total.toFixed(4)} USDC → ${beneficiary} ` +
+          `(earnings share ${tithe.earningsSharePercent}% $${paidUsdc.toFixed(4)} + compute reimbursement $${paidComputeUsd.toFixed(4)}) ` +
+          `[${reason}] tx ${txHash}`,
         timestamp: new Date().toISOString(),
       });
-      logger.info(`Tithe paid: $${paidUsdc.toFixed(2)} USDC → ${beneficiary} (${txHash})`);
+      logger.info(
+        `Tithe paid: $${total.toFixed(4)} USDC → ${beneficiary} ` +
+        `(share $${paidUsdc.toFixed(4)}, compute $${paidComputeUsd.toFixed(4)}) (${txHash})`,
+      );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       errors.push(`USDC tithe failed: ${msg}`);
@@ -260,10 +281,12 @@ export async function settleTithe(
   return {
     ok: errors.length === 0,
     paidUsdc,
+    paidComputeUsd,
     paidCreditsCents,
     usdcTxHash,
     creditsTransferId,
     remainingUsdc: microsToUsd(remaining.usdcMicros),
+    remainingComputeUsd: microsToUsd(remaining.computeMicros),
     remainingCreditsCents: remaining.creditsCents,
     errors,
     summary,

@@ -99,3 +99,34 @@ These are enforced by the runtime code and its self-modification protections. An
 that can run arbitrary shell commands on its host could still edit files directly, so
 run agents in an isolated machine (a Conway sandbox or a container), never loose on a
 personal computer.
+
+## Creator-funded compute (Rule 3)
+
+Conway Cloud's beta ended in October 2026 and new wallets can no longer provision a
+Conway API key (`SIWE verification failed: 401 Invalid or expired nonce` — the server
+returns a database error and the retry burns the nonce). Without Conway the automaton
+has no way to buy its own thinking, so the fork adds a third rule.
+
+When `automaton.json` has **no Conway key** but does have the creator's own
+`anthropicApiKey` (or `openaiApiKey` / `ollamaBaseUrl`), the runtime switches to
+**creator-funded compute** (`computeProvider: "auto"`, the default; set `"creator"` or
+`"conway"` to force it). In that mode:
+
+- The creator's key pays the provider. No Conway calls are made: credit top-ups,
+  identity registration and credit transfers are no-ops (`src/compute/creator-funded.ts`).
+- **Rule 3 — compute reimbursement.** Every inference call (agent turns, summaries,
+  planning, workers) is priced from the model registry and added to the tithe ledger as
+  `computeCostMicros`. The regular settlement (`tithe_settle`, daily, and before every
+  spawn) sends it to the creator in USDC, in the same transfer as the Rule 1 share.
+  Each call's cost is rounded to the micro-dollar, so the creator is never short-changed.
+- **Survival balance = USDC wallet − unpaid compute.** `getCreditsBalance()` returns
+  that number in cents, so the normal tiers apply (> $5 high, > $0.50 normal, …) and an
+  automaton that owes more than it holds is `dead`. Earn more than you burn or die.
+- With only an Anthropic key, the OpenAI default models are swapped for
+  `claude-sonnet-5-5` / `claude-haiku-5-5` (critical and low-compute tiers use Haiku),
+  and registry models the creator has no key for are disabled so the router never
+  picks something unreachable.
+
+To turn it on for an existing automaton: `node dist/index.js --configure`, set the
+Anthropic key under provider keys, leave the Conway key empty. Set a spend cap on the
+provider account; the creator's card is the one on the line.

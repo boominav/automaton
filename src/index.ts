@@ -34,6 +34,15 @@ import { DEFAULT_TREASURY_POLICY } from "./types.js";
 import { createLogger, setGlobalLogLevel, StructuredLogger } from "./observability/logger.js";
 import { prettySink } from "./observability/pretty-sink.js";
 import { bootstrapTopup } from "./conway/topup.js";
+import {
+  CREATOR_FUNDED_API_KEY,
+  applyCreatorFundedModelDefaults,
+  enableReachableModels,
+  isCreatorFunded,
+  setCreatorFundedActive,
+  wrapConwayClient,
+  wrapInferenceClient,
+} from "./compute/creator-funded.js";
 import { randomUUID } from "crypto";
 import { keccak256, toHex } from "viem";
 import { refreshSwitch, isPaused, resolveKillSwitchRepo } from "./killswitch/switch.js";
@@ -197,9 +206,22 @@ async function run(): Promise<void> {
   // Load wallet (chain-aware)
   const { account, chainIdentity, chainType: walletChainType } = await getWallet();
   const resolvedChainType = config.chainType || walletChainType || "evm";
-  const apiKey = config.conwayApiKey || loadApiKeyFromConfig();
-  if (!apiKey) {
-    logger.error("No API key found. Run: automaton --provision");
+  // Creator-funded compute (tithe Rule 3): no Conway key, but the creator's own
+  // provider key is set. The creator fronts inference; the automaton repays in USDC.
+  const creatorFunded = isCreatorFunded(config);
+  setCreatorFundedActive(creatorFunded);
+  let apiKey: string = config.conwayApiKey || loadApiKeyFromConfig() || "";
+  if (creatorFunded) {
+    apiKey = CREATOR_FUNDED_API_KEY;
+    if (applyCreatorFundedModelDefaults(config)) {
+      logger.info(`Creator-funded compute: model strategy set to ${config.modelStrategy?.inferenceModel} / ${config.modelStrategy?.lowComputeModel}.`);
+    }
+    logger.info(
+      `[${new Date().toISOString()}] Creator-funded compute ON: the creator's provider key pays for inference; ` +
+      `survival balance = USDC wallet minus compute owed; reimbursed with the tithe.`,
+    );
+  } else if (!apiKey) {
+    logger.error("No API key found. Run: automaton --provision (or set an Anthropic/OpenAI key for creator-funded compute)");
     process.exit(1);
   }
 
@@ -240,11 +262,19 @@ async function run(): Promise<void> {
   }
 
   // Create Conway client
-  const conway = createConwayClient({
+  const rawConway = createConwayClient({
     apiUrl: config.conwayApiUrl,
     apiKey,
     sandboxId: config.sandboxId,
   });
+  const conway = creatorFunded
+    ? wrapConwayClient(rawConway, {
+        db,
+        address: chainIdentity.address,
+        chainType: resolvedChainType,
+        earningsSharePercent: config.tithe?.earningsSharePercent,
+      })
+    : rawConway;
 
   // Register automaton identity (one-time, immutable)
   const registrationState = db.getIdentity("conwayRegistrationStatus");
@@ -285,7 +315,8 @@ async function run(): Promise<void> {
   // "gpt-oss:120b" route to Ollama based on their registered provider, not heuristics.
   const modelRegistry = new ModelRegistry(db.raw);
   modelRegistry.initialize();
-  const inference = createInferenceClient({
+  enableReachableModels(modelRegistry, config, creatorFunded);
+  const rawInference = createInferenceClient({
     apiUrl: config.conwayApiUrl,
     apiKey,
     defaultModel: config.inferenceModel,
@@ -296,6 +327,9 @@ async function run(): Promise<void> {
     ollamaBaseUrl,
     getModelProvider: (modelId) => modelRegistry.get(modelId)?.provider,
   });
+  const inference = creatorFunded
+    ? wrapInferenceClient(rawInference, modelRegistry, db)
+    : rawInference;
 
   if (ollamaBaseUrl) {
     logger.info(`[${new Date().toISOString()}] Ollama backend: ${ollamaBaseUrl}`);
@@ -353,6 +387,8 @@ async function run(): Promise<void> {
   // The agent decides larger topups itself via the topup_credits tool.
   if (isPaused(db)) {
     logger.info(`[${new Date().toISOString()}] Bootstrap topup skipped: paused by STOP switch.`);
+  } else if (creatorFunded) {
+    logger.info(`[${new Date().toISOString()}] Bootstrap topup skipped: creator-funded compute (no Conway credits).`);
   } else try {
     let bootstrapTimer: ReturnType<typeof setTimeout>;
     const bootstrapTimeout = new Promise<null>((_, reject) => {

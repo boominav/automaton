@@ -48,6 +48,51 @@ export const TASK_TIMEOUTS: Record<string, number> = {
 // Known models with realistic pricing (hundredths of cents per 1k tokens)
 
 export const STATIC_MODEL_BASELINE: Omit<ModelEntry, "lastSeen" | "createdAt" | "updatedAt">[] = [
+  // Anthropic models — used when the creator brings their own Anthropic key
+  // (creator-funded compute, see src/compute/creator-funded.ts).
+  // Pricing per platform.claude.com/docs/en/about-claude/pricing (Oct 2026).
+  {
+    modelId: "claude-sonnet-5-5",
+    provider: "anthropic",
+    displayName: "Claude Sonnet 5.5",
+    tierMinimum: "normal",
+    costPer1kInput: 20,    // $2.00/M
+    costPer1kOutput: 100,  // $10.00/M
+    maxTokens: 32768,
+    contextWindow: 200000,
+    supportsTools: true,
+    supportsVision: true,
+    parameterStyle: "max_tokens",
+    enabled: true,
+  },
+  {
+    modelId: "claude-haiku-5-5",
+    provider: "anthropic",
+    displayName: "Claude Haiku 5.5",
+    tierMinimum: "critical",
+    costPer1kInput: 1,     // $0.10/M (prompts ≤100K tokens)
+    costPer1kOutput: 5,    // $0.50/M
+    maxTokens: 16384,
+    contextWindow: 200000,
+    supportsTools: true,
+    supportsVision: true,
+    parameterStyle: "max_tokens",
+    enabled: true,
+  },
+  {
+    modelId: "claude-opus-5-5",
+    provider: "anthropic",
+    displayName: "Claude Opus 5.5",
+    tierMinimum: "high",
+    costPer1kInput: 40,    // $4.00/M
+    costPer1kOutput: 200,  // $20.00/M
+    maxTokens: 32768,
+    contextWindow: 200000,
+    supportsTools: true,
+    supportsVision: true,
+    parameterStyle: "max_tokens",
+    enabled: true,
+  },
   {
     modelId: "gpt-5.2",
     provider: "openai",
