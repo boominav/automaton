@@ -34,6 +34,7 @@ import { DEFAULT_TREASURY_POLICY } from "./types.js";
 import { createLogger, setGlobalLogLevel, StructuredLogger } from "./observability/logger.js";
 import { prettySink } from "./observability/pretty-sink.js";
 import { bootstrapTopup } from "./conway/topup.js";
+import { DEFAULT_BASE_RPC_URL } from "./tithe/chain.js";
 import {
   CREATOR_FUNDED_API_KEY,
   applyCreatorFundedModelDefaults,
@@ -206,6 +207,15 @@ async function run(): Promise<void> {
   // Load wallet (chain-aware)
   const { account, chainIdentity, chainType: walletChainType } = await getWallet();
   const resolvedChainType = config.chainType || walletChainType || "evm";
+  // Base RPC: viem's default (mainnet.base.org) rate-limits eth_getLogs, which
+  // the tithe's USDC inflow scan needs. Prefer the configured URL, else a public
+  // node that allows it. Every chain helper reads AUTOMATON_RPC_URL.
+  if (!process.env.AUTOMATON_RPC_URL) {
+    process.env.AUTOMATON_RPC_URL = config.rpcUrl || DEFAULT_BASE_RPC_URL;
+  }
+  if (!config.rpcUrl) config.rpcUrl = process.env.AUTOMATON_RPC_URL;
+  logger.info(`[${new Date().toISOString()}] Base RPC: ${process.env.AUTOMATON_RPC_URL}`);
+
   // Creator-funded compute (tithe Rule 3): no Conway key, but the creator's own
   // provider key is set. The creator fronts inference; the automaton repays in USDC.
   const creatorFunded = isCreatorFunded(config);

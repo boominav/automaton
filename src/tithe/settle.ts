@@ -155,9 +155,8 @@ export async function observeInflows(
         }
       }
     } catch (err) {
-      logger.warn("USDC inflow scan failed; will retry next time", {
-        error: err instanceof Error ? err.message : String(err),
-      });
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn(`USDC inflow scan failed; will retry next time: ${msg.split("\n")[0]}`);
     }
   }
 

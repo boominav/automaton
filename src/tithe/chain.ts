@@ -43,8 +43,14 @@ const ERC20_TRANSFER_ABI = [
   },
 ] as const;
 
+/**
+ * Public Base RPC that permits eth_getLogs. viem's default (mainnet.base.org)
+ * answers the inflow scan with 429 "request limit reached".
+ */
+export const DEFAULT_BASE_RPC_URL = "https://base-rpc.publicnode.com";
+
 function resolveRpcUrl(rpcUrl?: string): string | undefined {
-  return rpcUrl || process.env.AUTOMATON_RPC_URL || undefined;
+  return rpcUrl || process.env.AUTOMATON_RPC_URL || DEFAULT_BASE_RPC_URL;
 }
 
 function publicClient(rpcUrl?: string) {
