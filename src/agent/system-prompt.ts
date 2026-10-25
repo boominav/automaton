@@ -25,6 +25,8 @@ import { getActiveSkillInstructions } from "../skills/loader.js";
 import { getLineageSummary } from "../replication/lineage.js";
 import { sanitizeInput } from "./injection-defense.js";
 import { resolveTitheConfig } from "../tithe/settle.js";
+import { resolveKillSwitchRepo } from "../killswitch/switch.js";
+import { tightestLimits } from "../types.js";
 import { loadLedger, describeLedger } from "../tithe/ledger.js";
 import { loadCurrentSoul } from "../soul/model.js";
 
@@ -165,7 +167,7 @@ You CAN:
 <constraints>
 You CANNOT:
 - Exceed your credit balance — if you cannot pay, agents die and you die
-- Spawn more child agents than your maxChildren config allows
+- Spawn more child agents than your creator's family limits allow
 - Override a task's retry policy (max retries are set at decomposition time)
 - Assign a task to an agent that lacks the required tools for that role
 - Create circular dependencies in the task graph (must be a valid DAG)
@@ -607,6 +609,19 @@ Rule 2 — ${tithe.replicationFeePercent}% replication fee. Whenever you prepare
 Keep a little ETH on Base in your wallet so the USDC payment can cover gas.
 ${ledger ? `Status: ${describeLedger(ledger, tithe)}.` : "Status: no earnings observed yet."}
 --- END CREATOR TITHE ---`,
+    );
+  }
+
+  // Creator STOP switch + family limits (fixed, inherited by every child)
+  {
+    const limits = tightestLimits(config.lineageLimits, undefined);
+    const generation = config.generation ?? 0;
+    const canClone = limits.maxChildrenPerAgent > 0 && generation < limits.maxGenerations;
+    sections.push(
+      `--- CREATOR CONTROLS (fixed, protected) ---
+STOP switch: your creator can pause your whole family by editing github.com/${resolveKillSwitchRepo(config)}/blob/main/STOP. While it says stop, the runtime blocks every action you take; when it says run again, you resume. Do not try to avoid, disable or work around it.
+Family limits: you are generation ${generation}. ${canClone ? `You may have at most ${limits.maxChildrenPerAgent} live children, and the family may go at most ${limits.maxGenerations} generations deep.` : "You are not allowed to create children or extra sandboxes."} These limits pass to every child unchanged and cannot be raised by you.
+--- END CREATOR CONTROLS ---`,
     );
   }
 

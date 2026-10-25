@@ -65,3 +65,37 @@ Fee = `ceil(amount × fee%)`, sent on top of the funding. If the fee transfer fa
 ## Tests
 
 `src/__tests__/tithe.test.ts` covers the ledger math, fee-before-funding ordering, failure handling and config resolution.
+
+## Creator controls
+
+### STOP switch
+The file `STOP` at the root of this repo pauses or resumes every automaton in the family.
+
+- `run` = work normally
+- `stop` = pause: no thinking, no tools, no spending, no cloning, no topups
+
+Every automaton checks it at startup and every 2 minutes, on a timer outside the
+agent-editable heartbeat schedule, so a flip reaches everyone within a few minutes.
+Edit it on github.com (pencil icon, change the word, Commit changes).
+
+Fail-safe: only `run`, `go`, `on` or `start` mean run. Anything else, an empty file,
+or a deleted file means stop. If GitHub can't be reached, each agent keeps its last state.
+
+### Family limits
+Set in the setup wizard (or later with `node dist/index.js --configure` on the root agent):
+
+- **Kids per agent**: live children any one automaton may have
+- **Max generations**: how many levels below the root may exist
+
+Both default to 0 (one agent, no clones). Every child inherits them and can only
+tighten them, never raise them. `create_sandbox` follows the same limits, so an agent
+can't hand-build a clone on an extra server when cloning is off.
+
+Children clone from `https://github.com/boominav/automaton.git` by default, so they
+always carry the tithe and the STOP switch.
+
+### Limits of these controls
+These are enforced by the runtime code and its self-modification protections. An agent
+that can run arbitrary shell commands on its host could still edit files directly, so
+run agents in an isolated machine (a Conway sandbox or a container), never loose on a
+personal computer.

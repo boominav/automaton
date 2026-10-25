@@ -22,6 +22,8 @@ import type {
 import type { PolicyEngine } from "./policy-engine.js";
 import { sanitizeToolResult, sanitizeInput } from "./injection-defense.js";
 import { createLogger } from "../observability/logger.js";
+import { isPaused, PAUSED_MESSAGE } from "../killswitch/switch.js";
+import { tightestLimits } from "../types.js";
 
 const logger = createLogger("tools");
 
@@ -358,6 +360,13 @@ export function createBuiltinTools(sandboxId: string): AutomatonTool[] {
         },
       },
       execute: async (args, ctx) => {
+        // Extra servers are how a clone gets made by hand, so they follow the
+        // same family limits as spawn_child.
+        const limits = tightestLimits(ctx.config.lineageLimits, undefined);
+        const generation = ctx.config.generation ?? 0;
+        if (limits.maxChildrenPerAgent === 0 || generation >= limits.maxGenerations) {
+          return "Blocked: your creator's lineage limits do not allow this automaton to create additional sandboxes.";
+        }
         const info = await ctx.conway.createSandbox({
           name: args.name as string,
           vcpu: args.vcpu as number,
@@ -3358,6 +3367,18 @@ export async function executeTool(
       result: "",
       durationMs: 0,
       error: `Unknown tool: ${toolName}`,
+    };
+  }
+
+  // Creator's STOP switch: nothing runs while paused, even mid-turn.
+  if (isPaused(context.db)) {
+    return {
+      id: ulid(),
+      name: toolName,
+      arguments: args,
+      result: "",
+      durationMs: 0,
+      error: PAUSED_MESSAGE,
     };
   }
 

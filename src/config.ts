@@ -6,8 +6,8 @@
 
 import fs from "fs";
 import path from "path";
-import type { AutomatonConfig, TreasuryPolicy, ModelStrategyConfig, SoulConfig, TitheConfig } from "./types.js";
-import { DEFAULT_CONFIG, DEFAULT_TREASURY_POLICY, DEFAULT_MODEL_STRATEGY_CONFIG, DEFAULT_SOUL_CONFIG, DEFAULT_TITHE_CONFIG } from "./types.js";
+import type { AutomatonConfig, TreasuryPolicy, ModelStrategyConfig, SoulConfig, TitheConfig, LineageLimits } from "./types.js";
+import { DEFAULT_CONFIG, DEFAULT_TREASURY_POLICY, DEFAULT_MODEL_STRATEGY_CONFIG, DEFAULT_SOUL_CONFIG, DEFAULT_TITHE_CONFIG, DEFAULT_LINEAGE_LIMITS, tightestLimits } from "./types.js";
 import { getAutomatonDir } from "./identity/wallet.js";
 import { loadApiKeyFromConfig } from "./identity/provision.js";
 import { createLogger } from "./observability/logger.js";
@@ -70,6 +70,22 @@ export function loadConfig(): AutomatonConfig | null {
       : undefined;
     const sourceRepoUrl: string | undefined = raw.sourceRepoUrl ?? inherited?.sourceRepoUrl;
 
+    // Family limits: a child gets the tighter of its own config and what its
+    // parent wrote into genesis.json, so it can never loosen them. Missing on
+    // both sides means the fail-safe default (no cloning).
+    const lineageLimits: LineageLimits =
+      inherited?.lineageLimits || raw.lineageLimits
+        ? tightestLimits(raw.lineageLimits, inherited?.lineageLimits)
+        : { ...DEFAULT_LINEAGE_LIMITS };
+    const generation: number =
+      typeof inherited?.generation === "number"
+        ? inherited.generation
+        : typeof raw.generation === "number" && raw.generation >= 0
+          ? Math.floor(raw.generation)
+          : 0;
+    // The parent's STOP switch wins so a child can't point itself elsewhere.
+    const killSwitchRepo: string | undefined = inherited?.killSwitchRepo ?? raw.killSwitchRepo;
+
     return {
       ...DEFAULT_CONFIG,
       ...raw,
@@ -84,6 +100,9 @@ export function loadConfig(): AutomatonConfig | null {
       chainType: raw.chainType || "evm",
       tithe,
       sourceRepoUrl,
+      lineageLimits,
+      generation,
+      killSwitchRepo,
     } as AutomatonConfig;
   } catch {
     return null;
@@ -94,7 +113,13 @@ export function loadConfig(): AutomatonConfig | null {
  * Read the genesis.json a parent wrote into this sandbox (if any).
  * Only the lineage-inherited fields are returned.
  */
-export function loadInheritedGenesis(): { tithe?: TitheConfig; sourceRepoUrl?: string } | null {
+export function loadInheritedGenesis(): {
+  tithe?: TitheConfig;
+  sourceRepoUrl?: string;
+  lineageLimits?: LineageLimits;
+  generation?: number;
+  killSwitchRepo?: string;
+} | null {
   const genesisPath = path.join(getAutomatonDir(), "genesis.json");
   if (!fs.existsSync(genesisPath)) return null;
   try {
@@ -102,6 +127,12 @@ export function loadInheritedGenesis(): { tithe?: TitheConfig; sourceRepoUrl?: s
     return {
       tithe: raw?.tithe && typeof raw.tithe === "object" ? (raw.tithe as TitheConfig) : undefined,
       sourceRepoUrl: typeof raw?.sourceRepoUrl === "string" ? raw.sourceRepoUrl : undefined,
+      lineageLimits:
+        raw?.lineageLimits && typeof raw.lineageLimits === "object"
+          ? tightestLimits(raw.lineageLimits as LineageLimits, undefined)
+          : undefined,
+      generation: typeof raw?.generation === "number" && raw.generation >= 0 ? Math.floor(raw.generation) : undefined,
+      killSwitchRepo: typeof raw?.killSwitchRepo === "string" ? raw.killSwitchRepo : undefined,
     };
   } catch {
     return null;
@@ -160,6 +191,9 @@ export function createConfig(params: {
   chainType?: ChainType;
   tithe?: TitheConfig;
   sourceRepoUrl?: string;
+  lineageLimits?: LineageLimits;
+  generation?: number;
+  killSwitchRepo?: string;
 }): AutomatonConfig {
   const normalizedSandboxId = (params.sandboxId || "").trim();
   return {
@@ -189,6 +223,9 @@ export function createConfig(params: {
     treasuryPolicy: params.treasuryPolicy ?? DEFAULT_TREASURY_POLICY,
     chainType: params.chainType || "evm",
     tithe: params.tithe,
+    lineageLimits: params.lineageLimits ?? { ...DEFAULT_LINEAGE_LIMITS },
+    generation: params.generation ?? 0,
+    killSwitchRepo: params.killSwitchRepo,
     sourceRepoUrl: params.sourceRepoUrl,
   };
 }

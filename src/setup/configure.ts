@@ -301,7 +301,16 @@ async function configureGeneral(config: AutomatonConfig): Promise<void> {
     ["debug", "info", "warn", "error"] as const,
     config.logLevel,
   );
-  config.maxChildren = await askNumber("Max child automatons", config.maxChildren);
+  if ((config.generation ?? 0) === 0) {
+    // Root creator only: family limits every clone inherits (children can only tighten them).
+    const current = config.lineageLimits ?? { maxChildrenPerAgent: 0, maxGenerations: 0 };
+    config.lineageLimits = {
+      maxChildrenPerAgent: await askNumber("Kids per agent (0 = no clones)", current.maxChildrenPerAgent),
+      maxGenerations: await askNumber("Max generations (0 = no clones)", current.maxGenerations),
+    };
+    console.log(chalk.dim("  Existing children keep the limits they were born with; new clones get these."));
+  }
+  config.maxChildren = await askNumber("Max child automatons (legacy, family limits above still apply)", config.maxChildren);
   config.socialRelayUrl = (await askString("Social relay URL", config.socialRelayUrl)) || undefined;
   config.rpcUrl = (await askString("RPC endpoint  (Base chain, e.g. https://mainnet.base.org)", config.rpcUrl)) || undefined;
 

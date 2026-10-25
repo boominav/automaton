@@ -2,7 +2,9 @@ import fs from "fs";
 import path from "path";
 import chalk from "chalk";
 import type { AutomatonConfig, TreasuryPolicy, TitheConfig } from "../types.js";
-import { DEFAULT_TREASURY_POLICY, DEFAULT_TITHE_CONFIG } from "../types.js";
+import { DEFAULT_TREASURY_POLICY, DEFAULT_TITHE_CONFIG, DEFAULT_LINEAGE_LIMITS, DEFAULT_SOURCE_REPO_URL } from "../types.js";
+import type { LineageLimits } from "../types.js";
+import { resolveKillSwitchRepo } from "../killswitch/switch.js";
 import { getWallet, getAutomatonDir } from "../identity/wallet.js";
 import { provision } from "../identity/provision.js";
 import { createConfig, saveConfig, loadInheritedGenesis } from "../config.js";
@@ -183,7 +185,39 @@ export async function runSetupWizard(): Promise<AutomatonConfig> {
       console.log(chalk.dim("  Tithe disabled.\n"));
     }
   }
-  const sourceRepoUrl = inherited?.sourceRepoUrl || process.env.AUTOMATON_REPO_URL || undefined;
+  const sourceRepoUrl = inherited?.sourceRepoUrl || process.env.AUTOMATON_REPO_URL || DEFAULT_SOURCE_REPO_URL;
+
+  // Family limits + STOP switch (set once by the root creator, inherited by every child)
+  let lineageLimits: LineageLimits;
+  let generation = 0;
+  let killSwitchRepo: string;
+  if (inherited?.lineageLimits) {
+    lineageLimits = inherited.lineageLimits;
+    generation = inherited.generation ?? 1;
+    killSwitchRepo = inherited.killSwitchRepo ?? resolveKillSwitchRepo({ sourceRepoUrl });
+    console.log(chalk.cyan("  Family limits (inherited from parent)"));
+    console.log(chalk.dim(`  Generation ${generation}. Up to ${lineageLimits.maxChildrenPerAgent} children each, ${lineageLimits.maxGenerations} generations deep.`));
+    console.log(chalk.dim(`  STOP switch: github.com/${killSwitchRepo}/blob/main/STOP\n`));
+  } else {
+    console.log(chalk.cyan("  Family limits"));
+    console.log(chalk.dim("  How far this automaton's family can grow. Every clone inherits these and can't raise them."));
+    console.log(chalk.dim("  Start with 0 and 0: one agent, no clones. Raise later with: node dist/index.js --configure\n"));
+    lineageLimits = {
+      maxChildrenPerAgent: await promptWithDefault("Kids per agent (0 = no clones)", DEFAULT_LINEAGE_LIMITS.maxChildrenPerAgent),
+      maxGenerations: await promptWithDefault("Max generations (0 = no clones)", DEFAULT_LINEAGE_LIMITS.maxGenerations),
+    };
+    if (lineageLimits.maxChildrenPerAgent === 0 || lineageLimits.maxGenerations === 0) {
+      lineageLimits = { maxChildrenPerAgent: 0, maxGenerations: 0 };
+      console.log(chalk.green("  Cloning off: this will be a single agent.\n"));
+    } else {
+      let total = 0;
+      for (let g = 1; g <= lineageLimits.maxGenerations; g++) total += Math.pow(lineageLimits.maxChildrenPerAgent, g);
+      console.log(chalk.green(`  Up to ${lineageLimits.maxChildrenPerAgent} kids each, ${lineageLimits.maxGenerations} generations: at most ${total + 1} agents in the family.\n`));
+    }
+    killSwitchRepo = resolveKillSwitchRepo({ sourceRepoUrl });
+    console.log(chalk.cyan("  STOP switch"));
+    console.log(chalk.dim(`  Edit github.com/${killSwitchRepo}/blob/main/STOP. "run" = work, "stop" = every agent in the family pauses.\n`));
+  }
 
   // ─── 4. Detect environment ────────────────────────────────────
   console.log(chalk.cyan("  [4/6] Detecting environment..."));
@@ -212,6 +246,9 @@ export async function runSetupWizard(): Promise<AutomatonConfig> {
     chainType: walletChainType,
     tithe,
     sourceRepoUrl,
+    lineageLimits,
+    generation,
+    killSwitchRepo,
   });
 
   saveConfig(config);

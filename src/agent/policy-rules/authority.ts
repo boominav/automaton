@@ -28,6 +28,7 @@ const PROTECTED_PATHS = [
   "tithe",
   "replication/spawn",
   "replication/genesis",
+  "killswitch",
 ] as const;
 
 function deny(

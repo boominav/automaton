@@ -14,16 +14,24 @@ import type {
 } from "../types.js";
 import { DEFAULT_GENESIS_LIMITS } from "../types.js";
 import { resolveTitheConfig } from "../tithe/settle.js";
+import { tightestLimits } from "../types.js";
+import { resolveKillSwitchRepo } from "../killswitch/switch.js";
 
 /**
  * Settings every child inherits verbatim from its parent: the creator tithe
  * (same root beneficiary, same percent) and the repo to install from.
  */
-function inheritedLineage(config: AutomatonConfig): Pick<GenesisConfig, "tithe" | "sourceRepoUrl"> {
+function inheritedLineage(
+  config: AutomatonConfig,
+): Pick<GenesisConfig, "tithe" | "sourceRepoUrl" | "lineageLimits" | "generation" | "killSwitchRepo"> {
   const tithe = resolveTitheConfig(config);
   return {
     tithe: tithe ?? undefined,
     sourceRepoUrl: config.sourceRepoUrl || process.env.AUTOMATON_REPO_URL || undefined,
+    // Family limits and STOP switch pass down unchanged; the child is one generation deeper.
+    lineageLimits: tightestLimits(config.lineageLimits, undefined),
+    generation: (config.generation ?? 0) + 1,
+    killSwitchRepo: resolveKillSwitchRepo(config),
   };
 }
 

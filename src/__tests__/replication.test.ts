@@ -96,6 +96,9 @@ describe("spawnChild", () => {
     creatorMessage: "Hello child!",
     creatorAddress: identity.address,
     parentAddress: identity.address,
+    // Family limits that allow this test child (defaults are 0 = no cloning).
+    lineageLimits: { maxChildrenPerAgent: 3, maxGenerations: 3 },
+    generation: 1,
   };
 
   const validAddress = "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";

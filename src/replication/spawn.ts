@@ -18,7 +18,9 @@ import type { ChildLifecycle } from "./lifecycle.js";
 import { ulid } from "ulid";
 import { propagateConstitution } from "./constitution.js";
 import { loadConfig } from "../config.js";
-import { DEFAULT_SOURCE_REPO_URL } from "../types.js";
+import { DEFAULT_SOURCE_REPO_URL, DEFAULT_LINEAGE_LIMITS, tightestLimits } from "../types.js";
+import type { LineageLimits } from "../types.js";
+import { isPaused, resolveKillSwitchRepo } from "../killswitch/switch.js";
 import { ensureTitheSettledBeforeSpawn, resolveTitheConfig } from "../tithe/index.js";
 
 /**
@@ -59,10 +61,42 @@ function buildChildGenesisJson(genesis: GenesisConfig, identity: AutomatonIdenti
       chainType: genesis.chainType || (identity as any).chainType || "evm",
       tithe,
       sourceRepoUrl: repoUrl,
+      lineageLimits: resolveSpawnLineage(genesis).limits,
+      generation: resolveSpawnLineage(genesis).childGeneration,
+      killSwitchRepo: genesis.killSwitchRepo ?? resolveKillSwitchRepo(parentConfig ?? { sourceRepoUrl: repoUrl }),
     },
     null,
     2,
   );
+}
+
+/**
+ * Family limits for a spawn. The genesis is built from the parent's config by
+ * generateGenesisConfig, so it carries the parent's limits and the child's
+ * generation; the parent's automaton.json is the fallback.
+ */
+export function resolveSpawnLineage(genesis: GenesisConfig): { limits: LineageLimits; childGeneration: number } {
+  const parentConfig = genesis.lineageLimits && typeof genesis.generation === "number" ? null : loadConfig();
+  const limits = tightestLimits(genesis.lineageLimits ?? parentConfig?.lineageLimits ?? DEFAULT_LINEAGE_LIMITS, undefined);
+  const childGeneration =
+    typeof genesis.generation === "number" ? genesis.generation : (parentConfig?.generation ?? 0) + 1;
+  return { limits, childGeneration };
+}
+
+/** Throws when the creator's family limits don't allow another child. */
+export function assertLineageAllowsSpawn(activeChildren: number, limits: LineageLimits, childGeneration: number): void {
+  if (childGeneration > limits.maxGenerations) {
+    throw new Error(
+      limits.maxGenerations === 0
+        ? "Cannot spawn: your creator has cloning turned off (max generations is 0)."
+        : `Cannot spawn: a child would be generation ${childGeneration}, but your creator allows at most ${limits.maxGenerations}.`,
+    );
+  }
+  if (activeChildren >= limits.maxChildrenPerAgent) {
+    throw new Error(
+      `Cannot spawn: already at your creator's limit of ${limits.maxChildrenPerAgent} live children per automaton.`,
+    );
+  }
 }
 
 /** Pay the creator's share before a clone is allowed. Throws to block the spawn. */
@@ -122,12 +156,15 @@ export async function spawnChild(
         c.status !== "cleaned_up" &&
         c.status !== "failed",
     );
-  const maxChildren = (db as any).config?.maxChildren ?? 3;
-  if (existing.length >= maxChildren) {
-    throw new Error(
-      `Cannot spawn: already at max children (${maxChildren}). Kill or wait for existing children to die.`,
-    );
+  // Creator's STOP switch blocks all cloning while paused.
+  if (isPaused(db)) {
+    throw new Error("Cannot spawn: paused by your creator's STOP switch.");
   }
+
+  // Creator's family limits (per-automaton children and max generations).
+  // These replace the old config.maxChildren read, which never reached here.
+  const { limits, childGeneration } = resolveSpawnLineage(genesis);
+  assertLineageAllowsSpawn(existing.length, limits, childGeneration);
 
   // Creator tithe: the clone waits until the creator's share has been paid.
   await settleTitheOrThrow(conway, identity, db);

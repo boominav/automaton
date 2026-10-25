@@ -86,7 +86,52 @@ export interface AutomatonConfig {
    * carries the tithe code, otherwise children run upstream code without it.
    */
   sourceRepoUrl?: string;
+  /**
+   * Family-wide clone limits, set by the root creator and inherited by every
+   * child. A child may tighten them, never loosen them.
+   */
+  lineageLimits?: LineageLimits;
+  /** 0 for the root automaton, 1 for its children, 2 for grandchildren, ... */
+  generation?: number;
+  /** GitHub "owner/repo" holding the STOP switch file. Inherited by every child. */
+  killSwitchRepo?: string;
 }
+
+// ─── Lineage Limits ─────────────────────────────────────────────
+
+export interface LineageLimits {
+  /** How many live children any one automaton may have. 0 = no cloning. */
+  maxChildrenPerAgent: number;
+  /** How many generations below the root may exist. 0 = root only, 1 = children only, ... */
+  maxGenerations: number;
+}
+
+/** Fail-safe default: no cloning until the creator raises the limits. */
+export const DEFAULT_LINEAGE_LIMITS: LineageLimits = {
+  maxChildrenPerAgent: 0,
+  maxGenerations: 0,
+};
+
+/** Tightest of two limit sets (a child can never loosen what it inherited). */
+export function tightestLimits(a: LineageLimits | undefined, b: LineageLimits | undefined): LineageLimits {
+  const clean = (v: unknown): number =>
+    typeof v === "number" && Number.isFinite(v) && v >= 0 ? Math.floor(v) : 0;
+  const norm = (l: LineageLimits): LineageLimits => ({
+    maxChildrenPerAgent: clean(l.maxChildrenPerAgent),
+    maxGenerations: clean(l.maxGenerations),
+  });
+  if (!a && !b) return { ...DEFAULT_LINEAGE_LIMITS };
+  if (!a) return norm(b!);
+  if (!b) return norm(a);
+  const na = norm(a), nb = norm(b);
+  return {
+    maxChildrenPerAgent: Math.min(na.maxChildrenPerAgent, nb.maxChildrenPerAgent),
+    maxGenerations: Math.min(na.maxGenerations, nb.maxGenerations),
+  };
+}
+
+/** Repo whose STOP file pauses the whole family. */
+export const DEFAULT_KILL_SWITCH_REPO = "boominav/automaton";
 
 // ─── Creator Tithe ───────────────────────────────────────────────
 
@@ -116,7 +161,9 @@ export const DEFAULT_TITHE_CONFIG: Omit<TitheConfig, "beneficiaryAddress"> = {
   settleBeforeSpawn: true,
 };
 
-export const DEFAULT_SOURCE_REPO_URL = "https://github.com/Conway-Research/automaton.git";
+// Ben's fork, so every child carries the tithe and the STOP switch even if
+// the root was started without AUTOMATON_REPO_URL set.
+export const DEFAULT_SOURCE_REPO_URL = "https://github.com/boominav/automaton.git";
 
 export const DEFAULT_CONFIG: Partial<AutomatonConfig> = {
   conwayApiUrl: "https://api.conway.tech",
@@ -900,6 +947,12 @@ export interface GenesisConfig {
   tithe?: TitheConfig;
   /** Repo the child should be cloned from (the fork carrying the tithe code). */
   sourceRepoUrl?: string;
+  /** Family clone limits, inherited (child may only tighten). */
+  lineageLimits?: LineageLimits;
+  /** The child's own generation number (parent's + 1). */
+  generation?: number;
+  /** STOP switch repo, inherited unchanged. */
+  killSwitchRepo?: string;
 }
 
 export const MAX_CHILDREN = 3;

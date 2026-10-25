@@ -36,6 +36,7 @@ import { prettySink } from "./observability/pretty-sink.js";
 import { bootstrapTopup } from "./conway/topup.js";
 import { randomUUID } from "crypto";
 import { keccak256, toHex } from "viem";
+import { refreshSwitch, isPaused, resolveKillSwitchRepo } from "./killswitch/switch.js";
 
 const logger = createLogger("main");
 const VERSION = "0.2.1";
@@ -336,9 +337,23 @@ async function run(): Promise<void> {
     logger.warn(`[${new Date().toISOString()}] State repo init failed: ${err.message}`);
   }
 
+  // ─── Creator STOP switch ────────────────────────────────────
+  // Checked before anything spends money (the bootstrap topup below).
+  const switchRepo = resolveKillSwitchRepo(config);
+  try {
+    const first = await refreshSwitch(db, config);
+    logger.info(
+      `[${new Date().toISOString()}] STOP switch (${switchRepo}/STOP): ${first.state}${first.reachable ? "" : " (unreachable, last known)"}`,
+    );
+  } catch (err: any) {
+    logger.warn(`[${new Date().toISOString()}] STOP switch check failed: ${err.message}`);
+  }
+
   // Bootstrap topup: buy minimum credits ($5) from USDC so the agent can start.
   // The agent decides larger topups itself via the topup_credits tool.
-  try {
+  if (isPaused(db)) {
+    logger.info(`[${new Date().toISOString()}] Bootstrap topup skipped: paused by STOP switch.`);
+  } else try {
     let bootstrapTimer: ReturnType<typeof setTimeout>;
     const bootstrapTimeout = new Promise<null>((_, reject) => {
       bootstrapTimer = setTimeout(() => reject(new Error("bootstrap topup timed out")), 15_000);
@@ -384,6 +399,18 @@ async function run(): Promise<void> {
     },
   });
 
+  // Creator STOP switch: re-checked every 2 minutes on its own timer,
+  // outside the heartbeat schedule the agent is allowed to edit.
+  const switchTimer = setInterval(() => {
+    refreshSwitch(db, config)
+      .then((r) => {
+        if (r.changed && r.state === "run") {
+          insertWakeEvent(db.raw, "killswitch", "Creator's STOP switch set back to run. Resuming work.");
+        }
+      })
+      .catch((err: any) => logger.warn(`STOP switch check failed: ${err?.message ?? err}`));
+  }, 120_000);
+
   heartbeat.start();
   logger.info(`[${new Date().toISOString()}] Heartbeat daemon started.`);
 
@@ -391,6 +418,7 @@ async function run(): Promise<void> {
   const shutdown = () => {
     logger.info(`[${new Date().toISOString()}] Shutting down...`);
     heartbeat.stop();
+    clearInterval(switchTimer);
     db.setAgentState("sleeping");
     db.close();
     process.exit(0);
@@ -403,8 +431,27 @@ async function run(): Promise<void> {
   // The automaton alternates between running and sleeping.
   // The heartbeat can wake it up.
 
+  let announcedPause = false;
   while (true) {
     try {
+      // Creator's STOP switch: hold still until it says run again.
+      if (isPaused(db)) {
+        if (!announcedPause) {
+          logger.warn(
+            `[${new Date().toISOString()}] PAUSED by STOP switch (${switchRepo}/STOP). Change it to "run" to resume.`,
+          );
+          db.setAgentState("sleeping");
+          announcedPause = true;
+        }
+        await sleep(30_000);
+        continue;
+      }
+      if (announcedPause) {
+        logger.info(`[${new Date().toISOString()}] STOP switch says run. Resuming.`);
+        announcedPause = false;
+        db.deleteKV("sleep_until");
+      }
+
       // Reload skills (may have changed since last loop)
       try {
         skills = loadSkills(skillsDir, db);

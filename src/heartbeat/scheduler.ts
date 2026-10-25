@@ -28,6 +28,10 @@ import {
   insertWakeEvent,
 } from "../state/database.js";
 import { createLogger } from "../observability/logger.js";
+import { isPaused } from "../killswitch/switch.js";
+
+/** Tasks allowed to run while the creator's STOP switch is set to stop (read-only). */
+const ALLOWED_WHILE_PAUSED = new Set(["tithe_observe"]);
 
 type DatabaseType = BetterSqlite3.Database;
 const logger = createLogger("heartbeat.scheduler");
@@ -174,6 +178,11 @@ export class DurableScheduler {
   async executeTask(taskName: string, ctx: TickContext): Promise<void> {
     const taskFn = this.tasks.get(taskName);
     if (!taskFn) return;
+
+    // Creator's STOP switch: while paused, only the read-only tithe observer
+    // runs. No topups, spawns, funding or payments. (The switch itself is
+    // checked on its own timer in index.ts, outside the agent-editable schedule.)
+    if (!ALLOWED_WHILE_PAUSED.has(taskName) && isPaused(this.legacyContext.db)) return;
 
     const schedule = getHeartbeatSchedule(this.db).find(
       (r) => r.taskName === taskName,

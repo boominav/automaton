@@ -15,6 +15,7 @@ import type {
   HeartbeatTaskFn,
   SurvivalTier,
 } from "../types.js";
+import { tightestLimits } from "../types.js";
 import type { HealthMonitor as ColonyHealthMonitor } from "../orchestration/health-monitor.js";
 import { sanitizeInput } from "../agent/injection-defense.js";
 import { getSurvivalTier } from "../conway/credits.js";
@@ -700,7 +701,13 @@ export const BUILTIN_TASKS: Record<string, HeartbeatTaskFn> = {
       ).length;
 
       const spawnNeeded = Math.max(0, pendingUnassignedRow.count - idleAgents);
-      const spawnCapacity = Math.max(0, taskCtx.config.maxChildren - activeAgents);
+      const perAgentLimit = Math.min(
+        taskCtx.config.maxChildren ?? 0,
+        tightestLimits(taskCtx.config.lineageLimits, undefined).maxChildrenPerAgent,
+      );
+      const generationAllowsChildren =
+        (taskCtx.config.generation ?? 0) < tightestLimits(taskCtx.config.lineageLimits, undefined).maxGenerations;
+      const spawnCapacity = generationAllowsChildren ? Math.max(0, perAgentLimit - activeAgents) : 0;
       const spawnRequested = Math.min(spawnNeeded, spawnCapacity);
 
       taskCtx.db.setKV("last_agent_pool_optimize", JSON.stringify({
