@@ -163,11 +163,14 @@ export function buildContextMessages(
       });
     }
 
-    // The agent's thinking as assistant message
-    if (turn.thinking) {
+    // The agent's thinking as assistant message. A turn that was only tool
+    // calls (no text — Claude does this routinely) still has to be rendered,
+    // or the tool results that follow lose their parent and the whole turn
+    // disappears from history.
+    if (turn.thinking || turn.toolCalls.length > 0) {
       const msg: ChatMessage = {
         role: "assistant",
-        content: turn.thinking,
+        content: turn.thinking || "",
       };
 
       // If there were tool calls, include them
@@ -195,6 +198,15 @@ export function buildContextMessages(
         });
       }
     }
+  }
+
+  // Never hand the provider a system-only conversation (Anthropic rejects it).
+  // No history and no input means a fresh wake: say so and let the agent go.
+  if (!pendingInput && !messages.some((m) => m.role !== "system")) {
+    messages.push({
+      role: "user",
+      content: "[system] No new input. Review your goals and continue your work.",
+    });
   }
 
   // ── Anti-Repetition Warning ──
