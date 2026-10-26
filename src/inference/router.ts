@@ -239,7 +239,12 @@ export class InferenceRouter {
     }
 
     if (provider === "anthropic") {
-      return this.fixAnthropicMessages(messages);
+      // The Anthropic client (conway/inference.ts) turns role:"tool" messages
+      // into real tool_result blocks and pairs them with the preceding
+      // tool_use ids. Flattening them to user text here (fixAnthropicMessages)
+      // breaks that pairing and the API rejects the request. Only merge
+      // consecutive same-role user/assistant messages.
+      return this.mergeConsecutiveSameRole(messages);
     }
 
     // For OpenAI/Conway, merge consecutive same-role messages
